@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 interface AuthContextType {
   user: User | null;
@@ -50,6 +50,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     let isMounted = true;
+    let authSubscription: { unsubscribe: () => void } | null = null;
 
     async function initAuth() {
       // 1. Check local demo authentication storage first
@@ -66,9 +67,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // ignore localStorage errors
       }
 
-      // 2. Try Supabase session safely
+      // 2. If Supabase is NOT configured, resolve session as unauthenticated immediately without network call
+      if (!isSupabaseConfigured) {
+        if (isMounted) {
+          setSession(null);
+          setUser(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // 3. Try Supabase session safely with timeout
       try {
-        const { data } = await supabase.auth.getSession();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase auth session timeout')), 3000)
+        );
+        const { data } = await Promise.race([supabase.auth.getSession(), timeoutPromise]);
+
         if (isMounted) {
           if (data?.session) {
             setSession(data.session);
@@ -79,7 +94,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           }
         }
       } catch (err) {
-        console.warn('Supabase getSession failed, using default state:', err);
+        console.warn('Supabase getSession failed or timed out:', err);
         if (isMounted) {
           setSession(null);
           setUser(null);
@@ -90,20 +105,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
 
-      // 3. Listen for auth changes safely
+      // 4. Listen for auth changes safely
       try {
         const { data } = supabase.auth.onAuthStateChange((_event, session) => {
           if (isMounted) {
             if (session) {
               setSession(session);
               setUser(session.user);
+            } else {
+              setSession(null);
+              setUser(null);
             }
           }
         });
-
-        return () => {
-          data?.subscription?.unsubscribe();
-        };
+        authSubscription = data?.subscription || null;
       } catch (err) {
         console.warn('Supabase onAuthStateChange failed:', err);
       }
@@ -113,14 +128,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     return () => {
       isMounted = false;
+      if (authSubscription) {
+        authSubscription.unsubscribe();
+      }
     };
   }, []);
 
   const signInWithPassword = async (email: string, password: string) => {
-    const isSupabaseConfigured = 
-      process.env.NEXT_PUBLIC_SUPABASE_URL && 
-      !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder');
-
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -161,7 +175,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const signOut = async () => {
     try {
-      await supabase.auth.signOut();
+      if (isSupabaseConfigured) {
+        await supabase.auth.signOut();
+      }
     } catch (err) {
       console.warn('Error signing out of Supabase:', err);
     } finally {

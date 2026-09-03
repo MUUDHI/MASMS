@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { BookOpen, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
-import { supabase, Subject, Department, INITIAL_SUBJECTS } from '@/lib/supabase';
+import { supabase, safeSupabaseQuery, Subject, Department, INITIAL_SUBJECTS } from '@/lib/supabase';
 
 export default function SubjectsPage() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -28,16 +28,17 @@ export default function SubjectsPage() {
   async function fetchSubjects() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('subjects')
-        .select('*')
-        .order('created_at', { ascending: false });
-        
-      if (error || !data || data.length === 0) {
-        setSubjects(INITIAL_SUBJECTS);
-      } else {
-        setSubjects(data);
-      }
+      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
+        const { data, error } = await supabase
+          .from('subjects')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error || !data || data.length === 0) {
+          return INITIAL_SUBJECTS;
+        }
+        return data;
+      }, INITIAL_SUBJECTS);
+      setSubjects(loadedSubjects);
     } catch {
       setSubjects(INITIAL_SUBJECTS);
     } finally {

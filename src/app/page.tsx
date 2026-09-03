@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { 
   supabase, 
+  safeSupabaseQuery,
   Student, 
   FeeLedger, 
   ExamResult, 
@@ -55,22 +56,31 @@ export default function Dashboard() {
     setLoading(true);
     try {
       // 1. Fetch Students
-      const { data: stData } = await supabase.from('students').select('*');
-      const studentList: Student[] = (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
+      const studentList = await safeSupabaseQuery<Student[]>(async () => {
+        const { data } = await supabase.from('students').select('*');
+        return data && data.length > 0 ? data : INITIAL_STUDENTS;
+      }, INITIAL_STUDENTS);
       setStudents(studentList);
 
       // 2. Fetch Fees
-      const { data: feeData } = await supabase.from('fee_ledgers').select('*');
-      const feeList: FeeLedger[] = (feeData && feeData.length > 0) ? feeData : INITIAL_FEES;
+      const feeList = await safeSupabaseQuery<FeeLedger[]>(async () => {
+        const { data } = await supabase.from('fee_ledgers').select('*');
+        return data && data.length > 0 ? data : INITIAL_FEES;
+      }, INITIAL_FEES);
 
       // 3. Fetch Exams
-      const { data: exData } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false }).limit(5);
-      const examList: ExamResult[] = (exData && exData.length > 0) ? exData : INITIAL_EXAMS;
+      const examList = await safeSupabaseQuery<ExamResult[]>(async () => {
+        const { data } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false }).limit(5);
+        return data && data.length > 0 ? data : INITIAL_EXAMS;
+      }, INITIAL_EXAMS);
       setRecentExams(examList);
 
       // 4. Fetch Subjects
-      const { data: subData } = await supabase.from('subjects').select('*');
-      setSubjects((subData && subData.length > 0) ? subData : INITIAL_SUBJECTS);
+      const subjectList = await safeSupabaseQuery<Subject[]>(async () => {
+        const { data } = await supabase.from('subjects').select('*');
+        return data && data.length > 0 ? data : INITIAL_SUBJECTS;
+      }, INITIAL_SUBJECTS);
+      setSubjects(subjectList);
 
       // Compute exact 9 metrics
       const totalStudents = studentList.length;

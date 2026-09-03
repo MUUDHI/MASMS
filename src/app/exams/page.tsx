@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Award, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
+  safeSupabaseQuery,
   ExamResult, 
   Student, 
   Subject, 
@@ -42,20 +43,25 @@ export default function ExamsPage() {
     setLoading(true);
     try {
       // Fetch students
-      const { data: stData } = await supabase.from('students').select('*').order('full_name');
-      setStudents((stData && stData.length > 0) ? stData : INITIAL_STUDENTS);
+      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
+        const { data: stData } = await supabase.from('students').select('*').order('full_name');
+        return (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
+      }, INITIAL_STUDENTS);
+      setStudents(loadedStudents);
 
       // Fetch subjects
-      const { data: subData } = await supabase.from('subjects').select('*').order('subject_name');
-      setSubjects((subData && subData.length > 0) ? subData : INITIAL_SUBJECTS);
+      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
+        const { data: subData } = await supabase.from('subjects').select('*').order('subject_name');
+        return (subData && subData.length > 0) ? subData : INITIAL_SUBJECTS;
+      }, INITIAL_SUBJECTS);
+      setSubjects(loadedSubjects);
 
       // Fetch exams
-      const { data: exData } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false });
-      if (exData && exData.length > 0) {
-        setExams(exData);
-      } else {
-        setExams(INITIAL_EXAMS);
-      }
+      const loadedExams = await safeSupabaseQuery<ExamResult[]>(async () => {
+        const { data: exData } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false });
+        return (exData && exData.length > 0) ? exData : INITIAL_EXAMS;
+      }, INITIAL_EXAMS);
+      setExams(loadedExams);
     } catch {
       setStudents(INITIAL_STUDENTS);
       setSubjects(INITIAL_SUBJECTS);

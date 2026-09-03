@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Users, Plus, Search, Edit, Trash2, X, Check, BookOpen, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
+  safeSupabaseQuery,
   Student, 
   Subject, 
   Department, 
@@ -59,23 +60,25 @@ function StudentsContent() {
     setLoading(true);
     try {
       // Fetch subjects
-      const { data: subData } = await supabase.from('subjects').select('*').order('subject_name');
-      const loadedSubjects = (subData && subData.length > 0) ? subData : INITIAL_SUBJECTS;
+      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
+        const { data } = await supabase.from('subjects').select('*').order('subject_name');
+        return (data && data.length > 0) ? data : INITIAL_SUBJECTS;
+      }, INITIAL_SUBJECTS);
       setSubjects(loadedSubjects);
 
       // Fetch students
-      const { data: stData } = await supabase.from('students').select('*').order('student_custom_id', { ascending: true });
-      if (stData && stData.length > 0) {
-        // Fetch enrollments
-        const { data: enrollData } = await supabase.from('student_enrollments').select('*');
-        const studentList = stData.map((s) => {
-          const sEnrolls = enrollData?.filter(e => e.student_id === s.id).map(e => e.subject_id) || [];
-          return { ...s, enrolled_subject_ids: sEnrolls };
-        });
-        setStudents(studentList);
-      } else {
-        setStudents(INITIAL_STUDENTS);
-      }
+      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
+        const { data: stData } = await supabase.from('students').select('*').order('student_custom_id', { ascending: true });
+        if (stData && stData.length > 0) {
+          const { data: enrollData } = await supabase.from('student_enrollments').select('*');
+          return stData.map((s) => {
+            const sEnrolls = enrollData?.filter(e => e.student_id === s.id).map(e => e.subject_id) || [];
+            return { ...s, enrolled_subject_ids: sEnrolls };
+          });
+        }
+        return INITIAL_STUDENTS;
+      }, INITIAL_STUDENTS);
+      setStudents(loadedStudents);
     } catch (err) {
       console.warn('Using local initial students data:', err);
       setStudents(INITIAL_STUDENTS);

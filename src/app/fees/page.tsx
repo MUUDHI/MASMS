@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { CreditCard, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
+  safeSupabaseQuery,
   FeeLedger, 
   Student, 
   FeeStatus, 
@@ -43,17 +44,18 @@ export default function FeesPage() {
     setLoading(true);
     try {
       // Fetch students list for dropdown
-      const { data: stData } = await supabase.from('students').select('*').order('full_name');
-      const loadedStudents = (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
+      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
+        const { data: stData } = await supabase.from('students').select('*').order('full_name');
+        return (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
+      }, INITIAL_STUDENTS);
       setStudents(loadedStudents);
 
       // Fetch fee ledgers
-      const { data: feeData } = await supabase.from('fee_ledgers').select('*').order('created_at', { ascending: false });
-      if (feeData && feeData.length > 0) {
-        setFees(feeData);
-      } else {
-        setFees(INITIAL_FEES);
-      }
+      const loadedFees = await safeSupabaseQuery<FeeLedger[]>(async () => {
+        const { data: feeData } = await supabase.from('fee_ledgers').select('*').order('created_at', { ascending: false });
+        return (feeData && feeData.length > 0) ? feeData : INITIAL_FEES;
+      }, INITIAL_FEES);
+      setFees(loadedFees);
     } catch {
       setStudents(INITIAL_STUDENTS);
       setFees(INITIAL_FEES);

@@ -10,8 +10,38 @@ if (!supabaseKey) {
   supabaseKey = 'placeholder-anon-key';
 }
 
+// Helper to check if valid Supabase environment configuration is available
+export const isSupabaseConfigured = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL && 
+  !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder') &&
+  process.env.NEXT_PUBLIC_SUPABASE_URL.startsWith('http') &&
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
+  !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.includes('placeholder')
+);
+
 // Initialize the Supabase client safely
 export const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Safe Supabase query runner with instant fallback when unconfigured or timing out
+export async function safeSupabaseQuery<T>(
+  queryFn: () => Promise<T>,
+  fallbackValue: T,
+  timeoutMs = 4000
+): Promise<T> {
+  if (!isSupabaseConfigured) {
+    return fallbackValue;
+  }
+  try {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Supabase query timeout')), timeoutMs)
+    );
+    const result = await Promise.race([queryFn(), timeoutPromise]);
+    return result;
+  } catch (err) {
+    console.warn('Supabase query execution failed or timed out, using fallback data:', err);
+    return fallbackValue;
+  }
+}
 
 // Types derived from schema
 export type Department = 'Primary Education' | 'Secondary Education' | 'Islamic Studies';
