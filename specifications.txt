@@ -1,0 +1,99 @@
+========================================================================
+Murtazim Academy School Management System (MASMS) - Version 1 Specification
+========================================================================
+
+1. PROJECT OVERVIEW
+------------------------------------------------------------------------
+Build a modern, premium, responsive, and easy-to-use School Management System 
+for Murtazim Academy in Mogadishu, Somalia. 
+- The system must prioritize simplicity, manual management, and professional organization.
+- The academy operates three distinct departments with specific schedules, classes, subjects, students, fees, and examination records.
+- The application focuses entirely on managing students, enrollments, fees, and exam results.
+- All records must be directly and easily editable manually by administrators.
+
+2. BRANDING & DESIGN REQUIREMENTS
+------------------------------------------------------------------------
+- UI Style: Premium SaaS-style interface featuring a high-fidelity glassmorphism paradigm (frosted glass containers, background blur effects, thin white-translucent borders).
+- Corporate Color Tokens:
+  * Primary Green: #059A47 (Dashboard elements, success indicators, "Paid" status badges, active nav highlights)
+  * Secondary Blue: #1178B8 (Main headers, table structures, currency metrics, action items)
+  * Accent Orange: #F0A01E (Exam performance graphs, metrics highlights)
+  * Status Warning/Alert: #EF4444 (Strictly for "Unpaid" status UI badges)
+  * Background White: #FFFFFF
+- Assets: The global navigation header must pull the official institutional branding emblem from the local 'logo.png' asset file.
+
+3. CORE SYSTEM STRUCTURE & DATA RESTRICTIONS
+------------------------------------------------------------------------
+The system must rigidly enforce structural binding pairs within all enrollment and management workflows. Administrators cannot mix and match departments with incorrect shifts:
+
+A. Primary Education
+   - Schedule/Time Group: Night
+   - Classes: Grade 1, Grade 2, Grade 3
+   - Pre-seeded Subjects: Somali, English, Math
+   - Enrollment Logic: Students may enroll in one or multiple individual subjects.
+
+B. Secondary Education
+   - Schedule/Time Group: Day
+   - Classes: English
+   - Pre-seeded Subjects: English
+   - Enrollment Logic: Students may enroll in one or multiple subjects. (Future scientific classes are excluded from V1).
+
+C. Islamic Studies
+   - Schedule/Time Group: Part-Time
+   - Classes: تمهيد 1, تمهيد 2, تمهيد 3
+   - Subjects: To be added manually by administrators after final confirmation.
+   - Enrollment Logic: Students typically belong to a single Islamic class structure.
+
+4. MODULE REQUIREMENTS
+------------------------------------------------------------------------
+A. Student Management
+   - Required Fields: Student Custom ID (auto-incrementing serial), Full Name, Department, Time Group, Class, Enrollment Date, Guardian Phone.
+   - Required Actions: Add Student, Edit Student, Delete Student, Search Student, Filter Students by Time Group/Department/Class/Fee Status.
+
+B. Subject Management
+   - Required Fields: Subject Name, Department, Base Fee Amount.
+   - Required Actions: Add Subject, Edit Subject, Delete Subject.
+
+C. Student Enrollments
+   - Logic: Students can enroll in one or multiple subjects. 
+   - Rule: System must store enrollments in a decoupled many-to-many relationship tracking system separate from basic student records.
+
+D. Fee Management (Flexible & Manually Editable Ledger)
+   - Configuration: A single student profile is allowed to have multiple chronological fee records over time.
+   - Financial Ledger Fields: Fee Amount (Base), Discount Amount (Optional), Final Fee Amount (Calculated: Base Fee - Discount), Fee Status.
+   - Strict Binary Billing Logic: Status badges must strictly map to a binary state. No dynamic intermediate terms.
+     * "Paid" (Green Badge): Rendered when amount paid balances or satisfies due parameters.
+     * "Unpaid" (Red/Orange Badge): Rendered in any instance where fees remain unfulfilled.
+   - Rule: System must allow administrators to manually override and adjust financial figures directly.
+
+E. Exams & Results (Gradebook Matrix)
+   - Required Fields: Student, Subject, Exam Type, Score (0.00 to 100.00), Grade (Manually assigned letters/status like 'A', 'B', 'Pass').
+   - Exam Type Categories: Quiz, Midterm, Final.
+   - Required Actions: Add Results, Edit Results, Delete Results.
+
+5. DASHBOARD SUMMARY REQUIREMENTS
+------------------------------------------------------------------------
+The core landing dashboard screen must render high-fidelity, real-time KPI data summaries tracking exactly 9 institutional metrics:
+1. Total Students
+2. Primary Education Students
+3. Secondary Education Students
+4. Islamic Studies Students
+5. Day Students
+6. Night Students
+7. Part-Time Students
+8. Paid Students
+9. Unpaid Students
+- Display elements: Include a metric for Total Fees Collected, a recent results panel, and clean summary widget components styled in line with the Google Stitch layout.
+
+6. EXCLUDED FROM VERSION 1 (CRITICAL CONSTRAINT)
+------------------------------------------------------------------------
+Do NOT build, scaffold, or allocate database space for the following:
+- Attendance Management
+- Teacher Accounts/Management
+- Parent Portals or Parent Accounts
+- Automated Notifications (SMS or Email)
+- Timetable/Schedule Matrix Management
+- Library or Certificate Generation Systems
+- Advanced system automation or academic year complexities
+- Scientific Classes (Biology, Chemistry, Physics)
+========================================================================

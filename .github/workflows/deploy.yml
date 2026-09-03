@@ -1,0 +1,67 @@
+name: Build & Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to push back to the repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the push back works cleanly
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (static export)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Copy out/ to repo root
+        run: |
+          # Remove old static chunks from root so stale hashed files don't accumulate
+          rm -rf _next
+          # Copy everything from out/ into the repo root (overwrite)
+          cp -r out/. .
+
+      - name: Verify basePath in index.html
+        run: |
+          echo "=== Checking logo path ==="
+          grep -o 'src="[^"]*logo[^"]*"' index.html || true
+          echo "=== Checking nav hrefs ==="
+          grep -o 'href="/Murtazim-System-App[^"]*"' index.html | head -10 || true
+          echo "=== Checking for broken root-relative logo ==="
+          if grep -q 'src="/logo.png"' index.html; then
+            echo "ERROR: Found broken /logo.png reference!" && exit 1
+          else
+            echo "OK: No bare /logo.png reference found."
+          fi
+
+      - name: Commit and push updated root files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          # Only commit if there are actual changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit — build output is already up to date."
+          else
+            git commit -m "chore: rebuild static export [skip ci]"
+            git push origin main
+          fi
