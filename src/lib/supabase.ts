@@ -1,9 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+let supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+let supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-// Initialize the Supabase client
+if (!supabaseUrl || !supabaseUrl.startsWith('http')) {
+  supabaseUrl = 'https://placeholder.supabase.co';
+}
+if (!supabaseKey) {
+  supabaseKey = 'placeholder-anon-key';
+}
+
+// Initialize the Supabase client safely
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Types derived from schema
