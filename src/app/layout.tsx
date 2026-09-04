@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { NavProvider } from "@/context/NavContext";
 import { AuthProvider } from "@/context/AuthContext";
+import { ToastProvider } from "@/context/ToastContext";
 import { AppShell } from "@/components/AppShell";
 
 const geistSans = Geist({
@@ -30,13 +31,15 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex bg-[#f3f4f6] min-h-screen overflow-x-hidden`}
       >
-        <AuthProvider>
-          <NavProvider>
-            <AppShell>
-              {children}
-            </AppShell>
-          </NavProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <NavProvider>
+              <AppShell>
+                {children}
+              </AppShell>
+            </NavProvider>
+          </AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );

@@ -13,24 +13,23 @@ import {
   DollarSign, 
   Activity, 
   Award,
-  ChevronRight
+  ChevronRight,
+  AlertCircle
 } from 'lucide-react';
 import { 
   supabase, 
-  safeSupabaseQuery,
   Student, 
   FeeLedger, 
   ExamResult, 
   Subject,
-  KPIMetrics,
-  INITIAL_STUDENTS, 
-  INITIAL_FEES, 
-  INITIAL_EXAMS,
-  INITIAL_SUBJECTS 
+  KPIMetrics
 } from '@/lib/supabase';
+import { useToast } from '@/context/ToastContext';
 
 export default function Dashboard() {
+  const { showError } = useToast();
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<KPIMetrics>({
     totalStudents: 0,
     primaryStudents: 0,
@@ -54,53 +53,58 @@ export default function Dashboard() {
 
   async function loadDashboardData() {
     setLoading(true);
+    setErrorMessage(null);
     try {
       // 1. Fetch Students
-      const studentList = await safeSupabaseQuery<Student[]>(async () => {
-        const { data } = await supabase.from('students').select('*');
-        return data && data.length > 0 ? data : INITIAL_STUDENTS;
-      }, INITIAL_STUDENTS);
-      setStudents(studentList);
+      const { data: studentList, error: stErr } = await supabase.from('students').select('*');
+      if (stErr) {
+        showError('Failed to load students for dashboard', stErr);
+        throw stErr;
+      }
+      const validStudents: Student[] = studentList || [];
+      setStudents(validStudents);
 
       // 2. Fetch Fees
-      const feeList = await safeSupabaseQuery<FeeLedger[]>(async () => {
-        const { data } = await supabase.from('fee_ledgers').select('*');
-        return data && data.length > 0 ? data : INITIAL_FEES;
-      }, INITIAL_FEES);
+      const { data: feeList, error: feeErr } = await supabase.from('fee_ledgers').select('*');
+      if (feeErr) {
+        showError('Failed to load fee ledgers for dashboard', feeErr);
+        throw feeErr;
+      }
+      const validFees: FeeLedger[] = feeList || [];
 
-      // 3. Fetch Exams
-      const examList = await safeSupabaseQuery<ExamResult[]>(async () => {
-        const { data } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false }).limit(5);
-        return data && data.length > 0 ? data : INITIAL_EXAMS;
-      }, INITIAL_EXAMS);
-      setRecentExams(examList);
+      // 3. Fetch Recent Exams
+      const { data: examList, error: exErr } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false }).limit(5);
+      if (exErr) {
+        showError('Failed to load exam results for dashboard', exErr);
+        throw exErr;
+      }
+      setRecentExams(examList || []);
 
       // 4. Fetch Subjects
-      const subjectList = await safeSupabaseQuery<Subject[]>(async () => {
-        const { data } = await supabase.from('subjects').select('*');
-        return data && data.length > 0 ? data : INITIAL_SUBJECTS;
-      }, INITIAL_SUBJECTS);
-      setSubjects(subjectList);
+      const { data: subjectList, error: subErr } = await supabase.from('subjects').select('*');
+      if (subErr) {
+        showError('Failed to load subjects for dashboard', subErr);
+        throw subErr;
+      }
+      setSubjects(subjectList || []);
 
-      // Compute exact 9 metrics
-      const totalStudents = studentList.length;
-      const primaryStudents = studentList.filter(s => s.department === 'Primary Education').length;
-      const secondaryStudents = studentList.filter(s => s.department === 'Secondary Education').length;
-      const islamicStudents = studentList.filter(s => s.department === 'Islamic Studies').length;
+      // Compute exact metrics from real data
+      const totalStudents = validStudents.length;
+      const primaryStudents = validStudents.filter(s => s.department === 'Primary Education').length;
+      const secondaryStudents = validStudents.filter(s => s.department === 'Secondary Education').length;
+      const islamicStudents = validStudents.filter(s => s.department === 'Islamic Studies').length;
 
-      const dayStudents = studentList.filter(s => s.time_group === 'Day').length;
-      const nightStudents = studentList.filter(s => s.time_group === 'Night').length;
-      const partTimeStudents = studentList.filter(s => s.time_group === 'Part-Time').length;
+      const dayStudents = validStudents.filter(s => s.time_group === 'Day').length;
+      const nightStudents = validStudents.filter(s => s.time_group === 'Night').length;
+      const partTimeStudents = validStudents.filter(s => s.time_group === 'Part-Time').length;
 
-      // Calculate paid / unpaid student metrics
-      const paidStudentIds = new Set(feeList.filter(f => f.fee_status === 'Paid').map(f => f.student_id));
-      const unpaidStudentIds = new Set(feeList.filter(f => f.fee_status === 'Unpaid').map(f => f.student_id));
+      const paidStudentIds = new Set(validFees.filter(f => f.fee_status === 'Paid').map(f => f.student_id));
+      const unpaidStudentIds = new Set(validFees.filter(f => f.fee_status === 'Unpaid').map(f => f.student_id));
 
       const paidCount = paidStudentIds.size;
-      // Any student with an unpaid record or not in paid set
       const unpaidCount = Math.max(unpaidStudentIds.size, totalStudents - paidCount);
 
-      const totalFeesCollected = feeList
+      const totalFeesCollected = validFees
         .filter(f => f.fee_status === 'Paid')
         .reduce((sum, f) => sum + Number(f.final_fee_amount || 0), 0);
 
@@ -117,19 +121,22 @@ export default function Dashboard() {
         totalFeesCollected,
       });
 
-    } catch (err) {
-      console.warn('Using fallback data for dashboard:', err);
+    } catch (err: unknown) {
+      console.error('Dashboard data load error:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to connect to Supabase database.');
     } finally {
       setLoading(false);
     }
   }
 
   function getStudentName(sId: string): string {
+    if (!sId) return 'Unknown Student';
     const found = students.find(s => s.id === sId);
     return found ? found.full_name : `Student #${sId.substring(0, 5)}`;
   }
 
   function getSubjectName(subId: string): string {
+    if (!subId) return 'Subject';
     const found = subjects.find(s => s.id === subId);
     return found ? found.subject_name : 'Subject';
   }
@@ -143,37 +150,55 @@ export default function Dashboard() {
           <p className="text-gray-500 text-xs sm:text-sm mt-1">Real-time KPI metrics and operational summary for Murtazim Academy.</p>
         </div>
         <div className="glass-card px-4 py-2 flex items-center gap-2.5 self-start sm:self-auto shadow-sm border border-white/70">
-          <span className="w-2.5 h-2.5 rounded-full bg-primary-green animate-ping"></span>
-          <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Live System Active</span>
+          <span className={`w-2.5 h-2.5 rounded-full ${errorMessage ? 'bg-red-500 animate-pulse' : 'bg-primary-green animate-ping'}`}></span>
+          <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+            {errorMessage ? 'Database Connection Error' : 'Live System Active'}
+          </span>
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-bold block">Supabase Connection Error</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={loadDashboardData}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow transition-all"
+          >
+            Retry Query
+          </button>
+        </div>
+      )}
 
       {/* Primary KPI Summary Cards (4 Cards Grid) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <MetricCard 
           title="Total Students" 
-          value={metrics.totalStudents.toLocaleString()} 
+          value={loading ? '...' : metrics.totalStudents.toLocaleString()} 
           subtitle="Enrolled Across All Depts"
           icon={<Users className="w-5 h-5 sm:w-6 sm:h-6 text-secondary-blue" />} 
           colorClass="border-l-4 border-secondary-blue" 
         />
         <MetricCard 
           title="Paid Students" 
-          value={metrics.paidStudents.toLocaleString()} 
+          value={loading ? '...' : metrics.paidStudents.toLocaleString()} 
           subtitle="Fees Settled"
           icon={<CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-primary-green" />} 
           colorClass="border-l-4 border-primary-green" 
         />
         <MetricCard 
           title="Unpaid Students" 
-          value={metrics.unpaidStudents.toLocaleString()} 
+          value={loading ? '...' : metrics.unpaidStudents.toLocaleString()} 
           subtitle="Pending Financial Balance"
           icon={<XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-status-warning" />} 
           colorClass="border-l-4 border-status-warning" 
         />
         <MetricCard 
           title="Total Fees Collected" 
-          value={`$${metrics.totalFeesCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} 
+          value={loading ? '...' : `$${metrics.totalFeesCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} 
           subtitle="Settled Financial Ledger"
           icon={<DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-accent-orange" />} 
           colorClass="border-l-4 border-accent-orange" 
@@ -197,19 +222,19 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
               <SmallMetricCard 
                 title="Primary Education" 
-                value={metrics.primaryStudents.toString()} 
+                value={loading ? '...' : metrics.primaryStudents.toString()} 
                 badge="Night Shift"
                 accentColor="bg-blue-500"
               />
               <SmallMetricCard 
                 title="Secondary Education" 
-                value={metrics.secondaryStudents.toString()} 
+                value={loading ? '...' : metrics.secondaryStudents.toString()} 
                 badge="Day Shift"
                 accentColor="bg-amber-500"
               />
               <SmallMetricCard 
                 title="Islamic Studies" 
-                value={metrics.islamicStudents.toString()} 
+                value={loading ? '...' : metrics.islamicStudents.toString()} 
                 badge="Part-Time"
                 accentColor="bg-emerald-500"
               />
@@ -228,19 +253,19 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
               <SmallMetricCard 
                 title="Day Students" 
-                value={metrics.dayStudents.toString()} 
+                value={loading ? '...' : metrics.dayStudents.toString()} 
                 icon={<Sun className="w-4 h-4 text-amber-500" />} 
                 accentColor="bg-amber-400"
               />
               <SmallMetricCard 
                 title="Night Students" 
-                value={metrics.nightStudents.toString()} 
+                value={loading ? '...' : metrics.nightStudents.toString()} 
                 icon={<Moon className="w-4 h-4 text-indigo-500" />} 
                 accentColor="bg-indigo-400"
               />
               <SmallMetricCard 
                 title="Part-Time Students" 
-                value={metrics.partTimeStudents.toString()} 
+                value={loading ? '...' : metrics.partTimeStudents.toString()} 
                 icon={<Activity className="w-4 h-4 text-emerald-500" />} 
                 accentColor="bg-emerald-400"
               />
@@ -262,7 +287,9 @@ export default function Dashboard() {
             </div>
             
             <div className="space-y-3">
-              {recentExams.length > 0 ? (
+              {loading ? (
+                <div className="py-6 text-center text-gray-400 text-xs">Loading exam results...</div>
+              ) : recentExams.length > 0 ? (
                 recentExams.map((ex) => (
                   <div key={ex.id} className="p-3 bg-white/50 rounded-xl border border-white/80 hover:bg-white/80 transition-all cursor-default shadow-sm">
                     <div className="flex justify-between items-start mb-1">
@@ -286,7 +313,7 @@ export default function Dashboard() {
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-gray-500 py-6 text-center">No exam results recorded yet.</p>
+                <p className="text-xs text-gray-500 py-6 text-center font-medium">No exam results found</p>
               )}
             </div>
           </div>

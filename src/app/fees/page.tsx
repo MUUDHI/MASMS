@@ -4,18 +4,18 @@ import { useState, useEffect } from 'react';
 import { CreditCard, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
-  safeSupabaseQuery,
   FeeLedger, 
   Student, 
-  FeeStatus, 
-  INITIAL_FEES, 
-  INITIAL_STUDENTS 
+  FeeStatus
 } from '@/lib/supabase';
+import { useToast } from '@/context/ToastContext';
 
 export default function FeesPage() {
+  const { showError, showSuccess } = useToast();
   const [fees, setFees] = useState<FeeLedger[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('');
 
@@ -29,6 +29,7 @@ export default function FeesPage() {
   const [feeAmount, setFeeAmount] = useState<string>('30.00');
   const [discountAmount, setDiscountAmount] = useState<string>('0.00');
   const [feeStatus, setFeeStatus] = useState<FeeStatus>('Paid');
+  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
   // Calculated final fee preview
@@ -42,29 +43,33 @@ export default function FeesPage() {
 
   async function fetchData() {
     setLoading(true);
+    setErrorMessage(null);
     try {
       // Fetch students list for dropdown
-      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
-        const { data: stData } = await supabase.from('students').select('*').order('full_name');
-        return (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
-      }, INITIAL_STUDENTS);
-      setStudents(loadedStudents);
+      const { data: stData, error: stErr } = await supabase.from('students').select('*').order('full_name');
+      if (stErr) {
+        showError('Failed to load students for fee dropdown', stErr);
+        throw stErr;
+      }
+      setStudents(stData || []);
 
       // Fetch fee ledgers
-      const loadedFees = await safeSupabaseQuery<FeeLedger[]>(async () => {
-        const { data: feeData } = await supabase.from('fee_ledgers').select('*').order('created_at', { ascending: false });
-        return (feeData && feeData.length > 0) ? feeData : INITIAL_FEES;
-      }, INITIAL_FEES);
-      setFees(loadedFees);
-    } catch {
-      setStudents(INITIAL_STUDENTS);
-      setFees(INITIAL_FEES);
+      const { data: feeData, error: feeErr } = await supabase.from('fee_ledgers').select('*').order('created_at', { ascending: false });
+      if (feeErr) {
+        showError('Failed to load fee ledgers from database', feeErr);
+        throw feeErr;
+      }
+      setFees(feeData || []);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database error';
+      setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
   }
 
   function getStudentName(sId: string): string {
+    if (!sId) return 'Unknown Student';
     const found = students.find(s => s.id === sId);
     return found ? `${found.full_name} (#${found.student_custom_id})` : 'Unknown Student';
   }
@@ -92,13 +97,18 @@ export default function FeesPage() {
   }
 
   async function handleDelete(id: string) {
-    if (confirm('Are you sure you want to delete this fee ledger record?')) {
-      try {
-        await supabase.from('fee_ledgers').delete().eq('id', id);
-      } catch {
-        // fallback
+    if (!confirm('Are you sure you want to delete this fee ledger record?')) return;
+
+    try {
+      const { error } = await supabase.from('fee_ledgers').delete().eq('id', id);
+      if (error) {
+        showError('Failed to delete fee record', error);
+        return;
       }
+      showSuccess('Fee record deleted successfully');
       setFees(prev => prev.filter(f => f.id !== id));
+    } catch (err) {
+      showError('Unexpected error deleting fee record', err);
     }
   }
 
@@ -115,36 +125,58 @@ export default function FeesPage() {
       student_id: studentId,
       fee_amount: parsedFee,
       discount_amount: parsedDiscount,
-      final_fee_amount: calculatedFinal,
       fee_status: feeStatus,
     };
 
+    setSubmitting(true);
+
     if (isEditing) {
       try {
-        await supabase.from('fee_ledgers').update(payload).eq('id', currentId);
-      } catch {
-        // fallback
+        const { error } = await supabase
+          .from('fee_ledgers')
+          .update(payload)
+          .eq('id', currentId);
+
+        if (error) {
+          showError('Failed to update fee ledger record', error);
+          setFormError(error.message);
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess('Fee ledger record updated');
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error updating fee ledger', err);
+        setFormError(err instanceof Error ? err.message : 'Update failed');
+      } finally {
+        setSubmitting(false);
       }
-      setFees(prev => prev.map(f => f.id === currentId ? { ...f, ...payload } : f));
     } else {
-      let insertedFee: FeeLedger | null = null;
       try {
-        const { data } = await supabase.from('fee_ledgers').insert([payload]).select();
-        if (data && data[0]) insertedFee = data[0];
-      } catch {
-        // fallback
-      }
+        const { data, error } = await supabase
+          .from('fee_ledgers')
+          .insert([payload])
+          .select();
 
-      if (!insertedFee) {
-        insertedFee = {
-          id: 'f-' + Date.now(),
-          ...payload
-        };
+        if (error || !data || data.length === 0) {
+          showError('Failed to record fee ledger entry', error);
+          setFormError(error?.message || 'Insert failed');
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess('Fee record added successfully');
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error recording fee ledger', err);
+        setFormError(err instanceof Error ? err.message : 'Recording failed');
+      } finally {
+        setSubmitting(false);
       }
-      setFees(prev => [insertedFee!, ...prev]);
     }
-
-    setIsModalOpen(false);
   }
 
   // Filter fees
@@ -173,6 +205,22 @@ export default function FeesPage() {
           Add Fee Record
         </button>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-bold block">Database Error</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="glass-panel p-4 sm:p-6 rounded-2xl space-y-6">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -230,7 +278,7 @@ export default function FeesPage() {
                       -${Number(fee.discount_amount).toFixed(2)}
                     </td>
                     <td className="py-4 px-3 sm:px-4 font-extrabold text-secondary-blue text-xs sm:text-sm">
-                      ${Number(fee.final_fee_amount).toFixed(2)}
+                      ${Number(fee.final_fee_amount || (Number(fee.fee_amount) - Number(fee.discount_amount))).toFixed(2)}
                     </td>
                     <td className="py-4 px-3 sm:px-4">
                       {fee.fee_status === 'Paid' ? (
@@ -267,8 +315,9 @@ export default function FeesPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-gray-500 font-medium">
-                    No fee records found matching your filters.
+                  <td colSpan={6} className="py-12 text-center text-gray-500">
+                    <p className="font-semibold text-gray-700 text-base">No fee records found</p>
+                    <p className="text-xs text-gray-400 mt-1">Try clearing search filters or record a new fee ledger.</p>
                   </td>
                 </tr>
               )}
@@ -293,6 +342,13 @@ export default function FeesPage() {
               <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
                 <span>{formError}</span>
+              </div>
+            )}
+
+            {students.length === 0 && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>No students found in database. Please register a student first before recording fees.</span>
               </div>
             )}
 
@@ -378,11 +434,12 @@ export default function FeesPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-gray-200">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
+                <button type="button" disabled={submitting} onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
                   Cancel
                 </button>
-                <button type="submit" className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20">
-                  {isEditing ? 'Save Changes' : 'Record Fee'}
+                <button type="submit" disabled={submitting} className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20 flex items-center gap-2">
+                  {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                  <span>{isEditing ? 'Save Changes' : 'Record Fee'}</span>
                 </button>
               </div>
             </form>

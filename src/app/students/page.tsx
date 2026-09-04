@@ -5,23 +5,23 @@ import { useSearchParams } from 'next/navigation';
 import { Users, Plus, Search, Edit, Trash2, X, Check, BookOpen, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
-  safeSupabaseQuery,
   Student, 
   Subject, 
   Department, 
   Shift, 
-  DEPARTMENT_BINDINGS, 
-  INITIAL_STUDENTS, 
-  INITIAL_SUBJECTS 
+  DEPARTMENT_BINDINGS
 } from '@/lib/supabase';
+import { useToast } from '@/context/ToastContext';
 
 function StudentsContent() {
+  const { showError, showSuccess } = useToast();
   const searchParams = useSearchParams();
   const urlSearch = searchParams.get('search') || '';
 
   const [students, setStudents] = useState<Student[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState(urlSearch);
   const [selectedDept, setSelectedDept] = useState<string>('');
 
@@ -37,6 +37,7 @@ function StudentsContent() {
   const [guardianPhone, setGuardianPhone] = useState('');
   const [enrollmentDate, setEnrollmentDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
   
   // Form error notice
   const [formError, setFormError] = useState('');
@@ -58,31 +59,38 @@ function StudentsContent() {
 
   async function fetchData() {
     setLoading(true);
+    setErrorMessage(null);
     try {
       // Fetch subjects
-      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
-        const { data } = await supabase.from('subjects').select('*').order('subject_name');
-        return (data && data.length > 0) ? data : INITIAL_SUBJECTS;
-      }, INITIAL_SUBJECTS);
-      setSubjects(loadedSubjects);
+      const { data: subData, error: subErr } = await supabase.from('subjects').select('*').order('subject_name');
+      if (subErr) {
+        showError('Failed to load subjects', subErr);
+        throw subErr;
+      }
+      setSubjects(subData || []);
 
       // Fetch students
-      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
-        const { data: stData } = await supabase.from('students').select('*').order('student_custom_id', { ascending: true });
-        if (stData && stData.length > 0) {
-          const { data: enrollData } = await supabase.from('student_enrollments').select('*');
-          return stData.map((s) => {
-            const sEnrolls = enrollData?.filter(e => e.student_id === s.id).map(e => e.subject_id) || [];
-            return { ...s, enrolled_subject_ids: sEnrolls };
-          });
+      const { data: stData, error: stErr } = await supabase.from('students').select('*').order('student_custom_id', { ascending: true });
+      if (stErr) {
+        showError('Failed to load students from database', stErr);
+        throw stErr;
+      }
+
+      if (stData && stData.length > 0) {
+        const { data: enrollData, error: enrollErr } = await supabase.from('student_enrollments').select('*');
+        if (enrollErr) {
+          console.warn('Failed to load enrollments:', enrollErr);
         }
-        return INITIAL_STUDENTS;
-      }, INITIAL_STUDENTS);
-      setStudents(loadedStudents);
-    } catch (err) {
-      console.warn('Using local initial students data:', err);
-      setStudents(INITIAL_STUDENTS);
-      setSubjects(INITIAL_SUBJECTS);
+        const fullStudents = stData.map((s) => {
+          const sEnrolls = enrollData?.filter(e => e.student_id === s.id).map(e => e.subject_id) || [];
+          return { ...s, enrolled_subject_ids: sEnrolls };
+        });
+        setStudents(fullStudents);
+      } else {
+        setStudents([]);
+      }
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error connecting to database');
     } finally {
       setLoading(false);
     }
@@ -122,13 +130,18 @@ function StudentsContent() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this student record?')) {
-      try {
-        await supabase.from('students').delete().eq('id', id);
-      } catch {
-        // ignore fallback
+    if (!confirm('Are you sure you want to delete this student record?')) return;
+
+    try {
+      const { error } = await supabase.from('students').delete().eq('id', id);
+      if (error) {
+        showError('Failed to delete student', error);
+        return;
       }
+      showSuccess('Student deleted successfully');
       setStudents(prev => prev.filter(s => s.id !== id));
+    } catch (err) {
+      showError('Unexpected error deleting student', err);
     }
   };
 
@@ -151,6 +164,8 @@ function StudentsContent() {
       return;
     }
 
+    setSubmitting(true);
+
     const payload = {
       full_name: fullName.trim(),
       department: department,
@@ -162,52 +177,78 @@ function StudentsContent() {
 
     if (isEditing) {
       try {
-        await supabase.from('students').update(payload).eq('id', currentId);
-        // update enrollments
+        const { error: updateErr } = await supabase
+          .from('students')
+          .update(payload)
+          .eq('id', currentId);
+
+        if (updateErr) {
+          showError('Failed to update student record', updateErr);
+          setFormError(updateErr.message);
+          setSubmitting(false);
+          return;
+        }
+
+        // Update enrollments
         await supabase.from('student_enrollments').delete().eq('student_id', currentId);
         if (selectedSubjectIds.length > 0) {
           const enrollInserts = selectedSubjectIds.map(subId => ({ student_id: currentId, subject_id: subId }));
-          await supabase.from('student_enrollments').insert(enrollInserts);
-        }
-      } catch {
-        // local update
-      }
-      setStudents(prev => prev.map(s => s.id === currentId ? { ...s, ...payload, enrolled_subject_ids: selectedSubjectIds } : s));
-    } else {
-      let createdStudent: Student | null = null;
-      try {
-        const { data } = await supabase.from('students').insert([payload]).select();
-        if (data && data[0]) {
-          createdStudent = data[0];
-          if (selectedSubjectIds.length > 0) {
-            const enrollInserts = selectedSubjectIds.map(subId => ({ student_id: createdStudent!.id, subject_id: subId }));
-            await supabase.from('student_enrollments').insert(enrollInserts);
+          const { error: enrollErr } = await supabase.from('student_enrollments').insert(enrollInserts);
+          if (enrollErr) {
+            console.warn('Enrollments update warning:', enrollErr);
           }
         }
-      } catch {
-        // fallback local ID generator
-      }
 
-      if (!createdStudent) {
-        const nextCustomId = Math.max(1000, ...students.map(s => s.student_custom_id || 0)) + 1;
-        createdStudent = {
-          id: 'st-' + Date.now(),
-          student_custom_id: nextCustomId,
-          ...payload,
-          enrolled_subject_ids: selectedSubjectIds
-        };
+        showSuccess('Student updated successfully');
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error updating student', err);
+        setFormError(err instanceof Error ? err.message : 'Update failed');
+      } finally {
+        setSubmitting(false);
       }
-      setStudents(prev => [...prev, createdStudent!]);
+    } else {
+      try {
+        const { data, error: insertErr } = await supabase
+          .from('students')
+          .insert([payload])
+          .select();
+
+        if (insertErr || !data || data.length === 0) {
+          showError('Failed to create student record in database', insertErr);
+          setFormError(insertErr?.message || 'Database insert failed');
+          setSubmitting(false);
+          return;
+        }
+
+        const createdStudent = data[0] as Student;
+
+        if (selectedSubjectIds.length > 0) {
+          const enrollInserts = selectedSubjectIds.map(subId => ({ student_id: createdStudent.id, subject_id: subId }));
+          const { error: enrollErr } = await supabase.from('student_enrollments').insert(enrollInserts);
+          if (enrollErr) {
+            console.warn('Subject enrollment error:', enrollErr);
+          }
+        }
+
+        showSuccess(`Student ${createdStudent.full_name} registered successfully (#${createdStudent.student_custom_id})`);
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error registering student', err);
+        setFormError(err instanceof Error ? err.message : 'Registration failed');
+      } finally {
+        setSubmitting(false);
+      }
     }
-
-    setIsModalOpen(false);
   };
 
   // Filter students based on search query and department filter
   const filteredStudents = students.filter((student) => {
     const matchesSearch = 
       student.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      student.student_custom_id.toString().includes(searchQuery) ||
+      (student.student_custom_id && student.student_custom_id.toString().includes(searchQuery)) ||
       student.class_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       student.guardian_phone.includes(searchQuery);
 
@@ -234,6 +275,22 @@ function StudentsContent() {
           Add Student
         </button>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-bold block">Database Fetch Failure</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Main Glass Panel */}
       <div className="glass-panel p-4 sm:p-6 rounded-2xl space-y-6">
@@ -333,8 +390,8 @@ function StudentsContent() {
               ) : (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-gray-500">
-                    <p className="font-semibold text-gray-700">No students match your query.</p>
-                    <p className="text-xs text-gray-400 mt-1">Try clearing filters or add a new student profile.</p>
+                    <p className="font-semibold text-gray-700 text-base">No students found</p>
+                    <p className="text-xs text-gray-400 mt-1">Try clearing search filters or add a new student profile.</p>
                   </td>
                 </tr>
               )}
@@ -476,7 +533,7 @@ function StudentsContent() {
                       );
                     })
                   ) : (
-                    <p className="text-xs text-gray-400">No subjects available.</p>
+                    <p className="text-xs text-gray-400">No subjects available in database.</p>
                   )}
                 </div>
               </div>
@@ -484,6 +541,7 @@ function StudentsContent() {
               <div className="pt-4 flex justify-end gap-3 border-t border-gray-200">
                 <button 
                   type="button" 
+                  disabled={submitting}
                   onClick={() => setIsModalOpen(false)} 
                   className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100 transition-colors"
                 >
@@ -491,9 +549,11 @@ function StudentsContent() {
                 </button>
                 <button 
                   type="submit" 
-                  className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20 transition-all"
+                  disabled={submitting}
+                  className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20 transition-all flex items-center gap-2"
                 >
-                  {isEditing ? 'Save Changes' : 'Register Student'}
+                  {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                  <span>{isEditing ? 'Save Changes' : 'Register Student'}</span>
                 </button>
               </div>
             </form>

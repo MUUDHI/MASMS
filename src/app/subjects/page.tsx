@@ -2,11 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { BookOpen, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
-import { supabase, safeSupabaseQuery, Subject, Department, INITIAL_SUBJECTS } from '@/lib/supabase';
+import { supabase, Subject, Department } from '@/lib/supabase';
+import { useToast } from '@/context/ToastContext';
 
 export default function SubjectsPage() {
+  const { showError, showSuccess } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDept, setSelectedDept] = useState<string>('');
   
@@ -19,6 +22,7 @@ export default function SubjectsPage() {
   const [subjectName, setSubjectName] = useState('');
   const [department, setDepartment] = useState<Department>('Primary Education');
   const [baseFee, setBaseFee] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -27,20 +31,24 @@ export default function SubjectsPage() {
 
   async function fetchSubjects() {
     setLoading(true);
+    setErrorMessage(null);
     try {
-      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
-        const { data, error } = await supabase
-          .from('subjects')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (error || !data || data.length === 0) {
-          return INITIAL_SUBJECTS;
-        }
-        return data;
-      }, INITIAL_SUBJECTS);
-      setSubjects(loadedSubjects);
-    } catch {
-      setSubjects(INITIAL_SUBJECTS);
+      const { data, error } = await supabase
+        .from('subjects')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        showError('Failed to fetch subjects from database', error);
+        setErrorMessage(error.message);
+        setSubjects([]);
+      } else {
+        setSubjects(data || []);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database connection failure';
+      showError('Error connecting to database', err);
+      setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
@@ -67,13 +75,18 @@ export default function SubjectsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (confirm('Are you sure you want to delete this subject?')) {
-      try {
-        await supabase.from('subjects').delete().eq('id', id);
-      } catch {
-        // local delete fallback
+    if (!confirm('Are you sure you want to delete this subject?')) return;
+
+    try {
+      const { error } = await supabase.from('subjects').delete().eq('id', id);
+      if (error) {
+        showError('Failed to delete subject', error);
+        return;
       }
+      showSuccess('Subject deleted successfully');
       setSubjects(prev => prev.filter(s => s.id !== id));
+    } catch (err) {
+      showError('Unexpected error deleting subject', err);
     }
   }
 
@@ -93,32 +106,55 @@ export default function SubjectsPage() {
       base_fee_amount: numericFee
     };
 
+    setSubmitting(true);
+
     if (isEditing) {
       try {
-        await supabase.from('subjects').update(payload).eq('id', currentId);
-      } catch {
-        // fallback
+        const { error } = await supabase
+          .from('subjects')
+          .update(payload)
+          .eq('id', currentId);
+
+        if (error) {
+          showError('Failed to update subject', error);
+          setFormError(error.message);
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess('Subject updated successfully');
+        await fetchSubjects();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error updating subject', err);
+        setFormError(err instanceof Error ? err.message : 'Update failed');
+      } finally {
+        setSubmitting(false);
       }
-      setSubjects(prev => prev.map(s => s.id === currentId ? { ...s, ...payload } : s));
     } else {
-      let insertedObj: Subject | null = null;
       try {
-        const { data } = await supabase.from('subjects').insert([payload]).select();
-        if (data && data[0]) insertedObj = data[0];
-      } catch {
-        // fallback
-      }
+        const { data, error } = await supabase
+          .from('subjects')
+          .insert([payload])
+          .select();
 
-      if (!insertedObj) {
-        insertedObj = {
-          id: 'sub-' + Date.now(),
-          ...payload
-        };
+        if (error || !data || data.length === 0) {
+          showError('Failed to insert new subject', error);
+          setFormError(error?.message || 'Insert failed');
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess(`Subject "${data[0].subject_name}" added successfully`);
+        await fetchSubjects();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error creating subject', err);
+        setFormError(err instanceof Error ? err.message : 'Creation failed');
+      } finally {
+        setSubmitting(false);
       }
-      setSubjects(prev => [insertedObj!, ...prev]);
     }
-
-    setIsModalOpen(false);
   }
 
   const filteredSubjects = subjects.filter((s) => {
@@ -145,6 +181,22 @@ export default function SubjectsPage() {
           Add Subject
         </button>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-bold block">Database Error</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={fetchSubjects}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="glass-panel p-4 sm:p-6 rounded-2xl space-y-6">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -216,8 +268,9 @@ export default function SubjectsPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={4} className="py-12 text-center text-gray-500 font-medium">
-                    No subjects found.
+                  <td colSpan={4} className="py-12 text-center text-gray-500">
+                    <p className="font-semibold text-gray-700 text-base">No subjects found</p>
+                    <p className="text-xs text-gray-400 mt-1">Try clearing search filters or add a new subject.</p>
                   </td>
                 </tr>
               )}
@@ -281,11 +334,12 @@ export default function SubjectsPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-gray-200">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
+                <button type="button" disabled={submitting} onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
                   Cancel
                 </button>
-                <button type="submit" className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20">
-                  {isEditing ? 'Save Changes' : 'Add Subject'}
+                <button type="submit" disabled={submitting} className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20 flex items-center gap-2">
+                  {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                  <span>{isEditing ? 'Save Changes' : 'Add Subject'}</span>
                 </button>
               </div>
             </form>

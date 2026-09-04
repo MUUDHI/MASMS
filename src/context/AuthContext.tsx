@@ -12,29 +12,6 @@ interface AuthContextType {
   signOut: () => Promise<void>;
 }
 
-// Mock User for Fallback / Demo mode when Supabase is not configured or in offline mode
-const MOCK_USER: User = {
-  id: 'demo-admin-id',
-  app_metadata: { provider: 'email' },
-  user_metadata: { full_name: 'System Admin' },
-  aud: 'authenticated',
-  created_at: new Date().toISOString(),
-  email: 'admin@murtazim.edu.so',
-  phone: '',
-  role: 'authenticated',
-  updated_at: new Date().toISOString(),
-};
-
-const MOCK_SESSION: Session = {
-  access_token: 'demo-access-token',
-  token_type: 'bearer',
-  expires_in: 3600,
-  refresh_token: 'demo-refresh-token',
-  user: MOCK_USER,
-};
-
-const LOCAL_STORAGE_AUTH_KEY = 'murtazim_demo_authenticated';
-
 const AuthContext = createContext<AuthContextType>({
   user: null,
   session: null,
@@ -53,21 +30,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     let authSubscription: { unsubscribe: () => void } | null = null;
 
     async function initAuth() {
-      // 1. Check local demo authentication storage first
-      try {
-        if (typeof window !== 'undefined' && localStorage.getItem(LOCAL_STORAGE_AUTH_KEY) === 'true') {
-          if (isMounted) {
-            setSession(MOCK_SESSION);
-            setUser(MOCK_USER);
-            setLoading(false);
-          }
-          return;
-        }
-      } catch {
-        // ignore localStorage errors
-      }
-
-      // 2. If Supabase is NOT configured, resolve session as unauthenticated immediately without network call
+      // If Supabase is NOT configured, resolve session as unauthenticated immediately without network call
       if (!isSupabaseConfigured) {
         if (isMounted) {
           setSession(null);
@@ -77,7 +40,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return;
       }
 
-      // 3. Try Supabase session safely with timeout
+      // Try Supabase session safely with timeout
       try {
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Supabase auth session timeout')), 3000)
@@ -105,7 +68,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
 
-      // 4. Listen for auth changes safely
+      // Listen for auth changes safely
       try {
         const { data } = supabase.auth.onAuthStateChange((_event, session) => {
           if (isMounted) {
@@ -138,39 +101,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase.auth.signInWithPassword({
-          email,
+          email: email.trim(),
           password,
         });
-        if (!error && data?.session) {
+        if (error) {
+          return { error };
+        }
+        if (data?.session) {
           setSession(data.session);
           setUser(data.user);
           return { error: null };
         }
-        if (error && error.message !== 'Invalid login credentials') {
-          return { error };
-        }
       } catch (err) {
-        console.warn('Supabase sign-in error, using fallback:', err);
+        return { error: err instanceof Error ? err : new Error('Sign in failed') };
       }
     }
 
-    // Fallback Admin Login for Demo Mode or unconfigured Supabase backend
-    if (email.trim().toLowerCase() === 'admin@murtazim.edu.so' || password.length >= 4) {
-      const demoUser = { ...MOCK_USER, email: email.trim() };
-      const demoSession = { ...MOCK_SESSION, user: demoUser };
-      setSession(demoSession);
-      setUser(demoUser);
-      try {
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(LOCAL_STORAGE_AUTH_KEY, 'true');
-        }
-      } catch {
-        // ignore
-      }
-      return { error: null };
-    }
-
-    return { error: new Error('Invalid email or password.') };
+    return { error: new Error('Supabase authentication is not configured.') };
   };
 
   const signOut = async () => {
@@ -183,13 +130,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     } finally {
       setSession(null);
       setUser(null);
-      try {
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem(LOCAL_STORAGE_AUTH_KEY);
-        }
-      } catch {
-        // ignore
-      }
     }
   };
 

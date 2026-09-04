@@ -4,21 +4,20 @@ import { useState, useEffect } from 'react';
 import { Award, Plus, Search, Edit, Trash2, X, AlertCircle } from 'lucide-react';
 import { 
   supabase, 
-  safeSupabaseQuery,
   ExamResult, 
   Student, 
   Subject, 
-  ExamType, 
-  INITIAL_EXAMS, 
-  INITIAL_STUDENTS, 
-  INITIAL_SUBJECTS 
+  ExamType
 } from '@/lib/supabase';
+import { useToast } from '@/context/ToastContext';
 
 export default function ExamsPage() {
+  const { showError, showSuccess } = useToast();
   const [exams, setExams] = useState<ExamResult[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('');
 
@@ -33,6 +32,7 @@ export default function ExamsPage() {
   const [examType, setExamType] = useState<ExamType>('Midterm');
   const [score, setScore] = useState<string>('85.00');
   const [grade, setGrade] = useState<string>('A');
+  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -41,42 +41,47 @@ export default function ExamsPage() {
 
   async function fetchData() {
     setLoading(true);
+    setErrorMessage(null);
     try {
       // Fetch students
-      const loadedStudents = await safeSupabaseQuery<Student[]>(async () => {
-        const { data: stData } = await supabase.from('students').select('*').order('full_name');
-        return (stData && stData.length > 0) ? stData : INITIAL_STUDENTS;
-      }, INITIAL_STUDENTS);
-      setStudents(loadedStudents);
+      const { data: stData, error: stErr } = await supabase.from('students').select('*').order('full_name');
+      if (stErr) {
+        showError('Failed to load students for gradebook dropdown', stErr);
+        throw stErr;
+      }
+      setStudents(stData || []);
 
       // Fetch subjects
-      const loadedSubjects = await safeSupabaseQuery<Subject[]>(async () => {
-        const { data: subData } = await supabase.from('subjects').select('*').order('subject_name');
-        return (subData && subData.length > 0) ? subData : INITIAL_SUBJECTS;
-      }, INITIAL_SUBJECTS);
-      setSubjects(loadedSubjects);
+      const { data: subData, error: subErr } = await supabase.from('subjects').select('*').order('subject_name');
+      if (subErr) {
+        showError('Failed to load subjects for gradebook dropdown', subErr);
+        throw subErr;
+      }
+      setSubjects(subData || []);
 
       // Fetch exams
-      const loadedExams = await safeSupabaseQuery<ExamResult[]>(async () => {
-        const { data: exData } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false });
-        return (exData && exData.length > 0) ? exData : INITIAL_EXAMS;
-      }, INITIAL_EXAMS);
-      setExams(loadedExams);
-    } catch {
-      setStudents(INITIAL_STUDENTS);
-      setSubjects(INITIAL_SUBJECTS);
-      setExams(INITIAL_EXAMS);
+      const { data: exData, error: exErr } = await supabase.from('exam_results').select('*').order('recorded_at', { ascending: false });
+      if (exErr) {
+        showError('Failed to load exam results from database', exErr);
+        throw exErr;
+      }
+      setExams(exData || []);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Database error';
+      setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
   }
 
   function getStudentName(sId: string): string {
+    if (!sId) return 'Unknown Student';
     const found = students.find(s => s.id === sId);
     return found ? `${found.full_name} (#${found.student_custom_id})` : 'Unknown Student';
   }
 
   function getSubjectName(subId: string): string {
+    if (!subId) return 'Unknown Subject';
     const found = subjects.find(s => s.id === subId);
     return found ? `${found.subject_name} (${found.department})` : 'Unknown Subject';
   }
@@ -119,13 +124,18 @@ export default function ExamsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (confirm('Are you sure you want to delete this exam result?')) {
-      try {
-        await supabase.from('exam_results').delete().eq('id', id);
-      } catch {
-        // fallback
+    if (!confirm('Are you sure you want to delete this exam result?')) return;
+
+    try {
+      const { error } = await supabase.from('exam_results').delete().eq('id', id);
+      if (error) {
+        showError('Failed to delete exam result', error);
+        return;
       }
+      showSuccess('Exam result deleted successfully');
       setExams(prev => prev.filter(e => e.id !== id));
+    } catch (err) {
+      showError('Unexpected error deleting exam result', err);
     }
   }
 
@@ -156,32 +166,55 @@ export default function ExamsPage() {
       grade: grade.trim() || 'Pass',
     };
 
+    setSubmitting(true);
+
     if (isEditing) {
       try {
-        await supabase.from('exam_results').update(payload).eq('id', currentId);
-      } catch {
-        // fallback
+        const { error } = await supabase
+          .from('exam_results')
+          .update(payload)
+          .eq('id', currentId);
+
+        if (error) {
+          showError('Failed to update exam result', error);
+          setFormError(error.message);
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess('Exam result updated');
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error updating exam result', err);
+        setFormError(err instanceof Error ? err.message : 'Update failed');
+      } finally {
+        setSubmitting(false);
       }
-      setExams(prev => prev.map(ex => ex.id === currentId ? { ...ex, ...payload } : ex));
     } else {
-      let insertedEx: ExamResult | null = null;
       try {
-        const { data } = await supabase.from('exam_results').insert([payload]).select();
-        if (data && data[0]) insertedEx = data[0];
-      } catch {
-        // fallback
-      }
+        const { data, error } = await supabase
+          .from('exam_results')
+          .insert([payload])
+          .select();
 
-      if (!insertedEx) {
-        insertedEx = {
-          id: 'ex-' + Date.now(),
-          ...payload
-        };
+        if (error || !data || data.length === 0) {
+          showError('Failed to record exam result', error);
+          setFormError(error?.message || 'Insert failed');
+          setSubmitting(false);
+          return;
+        }
+
+        showSuccess('Exam result recorded successfully');
+        await fetchData();
+        setIsModalOpen(false);
+      } catch (err: unknown) {
+        showError('Error recording exam result', err);
+        setFormError(err instanceof Error ? err.message : 'Recording failed');
+      } finally {
+        setSubmitting(false);
       }
-      setExams(prev => [insertedEx!, ...prev]);
     }
-
-    setIsModalOpen(false);
   }
 
   // Filter exams
@@ -211,6 +244,22 @@ export default function ExamsPage() {
           Add Result
         </button>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-bold block">Database Error</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-xl shadow transition-all"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="glass-panel p-4 sm:p-6 rounded-2xl space-y-6">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -311,8 +360,9 @@ export default function ExamsPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-gray-500 font-medium">
-                    No examination records found matching your filters.
+                  <td colSpan={6} className="py-12 text-center text-gray-500">
+                    <p className="font-semibold text-gray-700 text-base">No exam results found</p>
+                    <p className="text-xs text-gray-400 mt-1">Try clearing search filters or record a new exam result.</p>
                   </td>
                 </tr>
               )}
@@ -337,6 +387,19 @@ export default function ExamsPage() {
               <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
                 <span>{formError}</span>
+              </div>
+            )}
+
+            {(students.length === 0 || subjects.length === 0) && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>
+                  {students.length === 0 && subjects.length === 0
+                    ? 'No students or subjects found in database. Please add students and subjects first.'
+                    : students.length === 0
+                    ? 'No students found in database. Please add a student first.'
+                    : 'No subjects found in database. Please add a subject first.'}
+                </span>
               </div>
             )}
 
@@ -412,11 +475,12 @@ export default function ExamsPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-gray-200">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
+                <button type="button" disabled={submitting} onClick={() => setIsModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">
                   Cancel
                 </button>
-                <button type="submit" className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20">
-                  {isEditing ? 'Save Changes' : 'Record Result'}
+                <button type="submit" disabled={submitting} className="px-6 py-2 rounded-xl text-sm font-semibold text-white bg-primary-green hover:bg-primary-green/90 shadow-lg shadow-primary-green/20 flex items-center gap-2">
+                  {submitting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                  <span>{isEditing ? 'Save Changes' : 'Record Result'}</span>
                 </button>
               </div>
             </form>

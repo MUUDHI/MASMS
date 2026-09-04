@@ -94,21 +94,27 @@ ALTER TABLE public.student_enrollments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fee_ledgers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.exam_results ENABLE ROW LEVEL SECURITY;
 
--- Create Policies to grant full access to authenticated users (Administrators)
+-- Create Policies to grant management access to app queries (anon and authenticated roles)
+DROP POLICY IF EXISTS admin_manage_students ON public.students;
+DROP POLICY IF EXISTS admin_manage_subjects ON public.subjects;
+DROP POLICY IF EXISTS admin_manage_enrollments ON public.student_enrollments;
+DROP POLICY IF EXISTS admin_manage_fees ON public.fee_ledgers;
+DROP POLICY IF EXISTS admin_manage_exams ON public.exam_results;
+
 CREATE POLICY admin_manage_students ON public.students 
-    FOR ALL TO anon USING (true) WITH CHECK (true);
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY admin_manage_subjects ON public.subjects 
-    FOR ALL TO anon USING (true) WITH CHECK (true);
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY admin_manage_enrollments ON public.student_enrollments 
-    FOR ALL TO anon USING (true) WITH CHECK (true);
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY admin_manage_fees ON public.fee_ledgers 
-    FOR ALL TO anon USING (true) WITH CHECK (true);
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 CREATE POLICY admin_manage_exams ON public.exam_results 
-    FOR ALL TO anon USING (true) WITH CHECK (true);
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- ====================================================================
 -- INITIAL DATABASE SEEDING
